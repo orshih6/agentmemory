@@ -33,6 +33,9 @@ workers:
           - "http://localhost:3113"
           - "http://127.0.0.1:3111"
           - "http://127.0.0.1:3113"
+          # iii console sidecar (--port 3114): its browser page calls the engine directly.
+          - "http://localhost:3114"
+          - "http://127.0.0.1:3114"
         allowed_methods: [GET, POST, PUT, DELETE, OPTIONS]
   - name: iii-state
     config:
