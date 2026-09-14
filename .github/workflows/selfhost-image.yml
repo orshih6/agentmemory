@@ -1,0 +1,55 @@
+# Builds the agentmemory server image for the orshih6 k0s cluster. Not part of upstream.
+#
+#   gh workflow run selfhost-image.yml -R orshih6/agentmemory --ref main
+#
+# Tags: sha-<commit>, <agentmemory npm version> (from the Dockerfile ARG), latest.
+name: Self-host image
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: selfhost-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository_owner == 'orshih6'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pinned agentmemory version
+        id: ver
+        run: echo "version=$(sed -nE 's/^ARG AGENTMEMORY_VERSION=(.+)$/\1/p' deploy/k8s/Dockerfile | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/agentmemory
+          tags: |
+            type=sha,format=long
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: deploy/k8s
+          file: deploy/k8s/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=agentmemory
+          cache-to: type=gha,mode=max,scope=agentmemory
