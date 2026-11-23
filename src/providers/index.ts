@@ -11,12 +11,12 @@ import { OpenAIProvider } from "./openai.js";
 import { OpenRouterProvider } from "./openrouter.js";
 import { ResilientProvider } from "./resilient.js";
 import { FallbackChainProvider } from "./fallback-chain.js";
-import { getEnvVar } from "../config.js";
+import { getEnvVar, getProviderKey } from "../config.js";
 
 export { createEmbeddingProvider, createImageEmbeddingProvider } from "./embedding/index.js";
 
 function requireEnvVar(key: string): string {
-  const value = getEnvVar(key);
+  const value = getProviderKey(key);
   if (!value) {
     throw new Error(
       `Missing required environment variable: ${key}. Set it in ~/.agentmemory/.env or as an environment variable.`,
@@ -25,13 +25,6 @@ function requireEnvVar(key: string): string {
   return value;
 }
 
-// #778: fallback providers used to inherit the primary provider's
-// model name (e.g. fallback Gemini was called with `gpt-4o-mini`),
-// 404'd every call, and tripped the circuit breaker — making
-// FALLBACK_PROVIDERS actively worse than no fallback. Each provider
-// must resolve its OWN env-driven default model. Mirrors the resolution
-// in detectProvider() so primary + fallback agree on what each
-// provider's default model is.
 function defaultModelFor(providerType: ProviderConfig["provider"]): string {
   switch (providerType) {
     case "openai":
@@ -68,11 +61,6 @@ export function createFallbackProvider(
   for (const providerType of fallbackConfig.providers) {
     if (providerType === config.provider) continue;
     try {
-      // #778: resolve the fallback's OWN default model (or its env
-      // override) rather than copying config.model from the primary.
-      // Without this, FALLBACK_PROVIDERS=gemini on an OpenAI primary
-      // would call Gemini with `gpt-4o-mini`, get a 404 every time,
-      // and trip the circuit breaker.
       const fbConfig: ProviderConfig = {
         provider: providerType,
         model: defaultModelFor(providerType),
@@ -107,7 +95,7 @@ function createBaseProvider(config: ProviderConfig): MemoryProvider {
       );
     case "gemini": {
       const geminiKey =
-        getEnvVar("GEMINI_API_KEY") || getEnvVar("GOOGLE_API_KEY");
+        getProviderKey("GEMINI_API_KEY") || getProviderKey("GOOGLE_API_KEY");
       if (!geminiKey) {
         throw new Error(
           "GEMINI_API_KEY (or GOOGLE_API_KEY) is required for the gemini provider",
@@ -128,7 +116,7 @@ function createBaseProvider(config: ProviderConfig): MemoryProvider {
         "https://openrouter.ai/api/v1/chat/completions",
       );
     case "openai": {
-      const openaiKey = getEnvVar("OPENAI_API_KEY");
+      const openaiKey = getProviderKey("OPENAI_API_KEY");
       if (!openaiKey) {
         throw new Error(
           "OPENAI_API_KEY is required for the openai provider",

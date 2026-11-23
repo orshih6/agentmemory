@@ -1,8 +1,10 @@
-import type { ISdk } from "iii-sdk";
+import type { IIIClient } from "iii-sdk";
 import type { Memory, CompressedObservation, ContextBlock } from "../types.js";
 import { KV, generateId } from "../state/schema.js";
-import { StateKV } from "../state/kv.js";
+import { StateKV, collectAll } from "../state/kv.js";
 import { recordAudit } from "./audit.js";
+import { indexMemory } from "./search.js";
+import { memoryTitleFromContent } from "./remember.js";
 import { recordAccessBatch } from "./access-tracker.js";
 import { logger } from "../logger.js";
 
@@ -32,7 +34,7 @@ function scoreEntry(entry: CoreMemoryEntry, now: number): number {
 }
 
 export function registerWorkingMemoryFunctions(
-  sdk: ISdk,
+  sdk: IIIClient,
   kv: StateKV,
   tokenBudget: number,
 ): void {
@@ -132,7 +134,7 @@ export function registerWorkingMemoryFunctions(
 
       const archivalLines: string[] = [];
 
-      const memories = await kv.list<Memory>(KV.memories);
+      const memories = await collectAll<Memory>(kv, KV.memories);
       const active = memories
         .filter((m) => m.isLatest !== false)
         .sort((a, b) => {
@@ -213,6 +215,7 @@ export function registerWorkingMemoryFunctions(
 
       let paged = 0;
       const pagedIds: string[] = [];
+      const archived: Memory[] = [];
       for (const entry of unpinned) {
         if (totalTokens <= coreBudget) break;
         const tokens = estimateTokens(entry.content);
@@ -222,7 +225,7 @@ export function registerWorkingMemoryFunctions(
           createdAt: entry.createdAt,
           updatedAt: new Date().toISOString(),
           type: "fact",
-          title: entry.content.slice(0, 80),
+          title: memoryTitleFromContent(entry.content),
           content: entry.content,
           concepts: [],
           files: [],
@@ -233,10 +236,20 @@ export function registerWorkingMemoryFunctions(
         };
         await kv.set(KV.memories, archivalMemory.id, archivalMemory);
         await kv.delete(CORE_SCOPE, entry.id);
+        archived.push(archivalMemory);
 
         totalTokens -= tokens;
         paged++;
         pagedIds.push(entry.id);
+      }
+
+      for (const memory of archived) {
+        await indexMemory(kv, memory).catch((err) => {
+          logger.warn("Paged memory indexing failed", {
+            memId: memory.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       }
 
       if (paged > 0) {

@@ -1,8 +1,9 @@
-import { TriggerAction, type ISdk } from "iii-sdk";
+import { TriggerAction, type IIIClient } from "iii-sdk";
 import { KV } from "../state/schema.js";
 import { StateKV } from "../state/kv.js";
 import { deleteImage, touchImage } from "../utils/image-store.js";
 import { withKeyedLock } from "../state/keyed-mutex.js";
+import { logger } from "../logger.js";
 
 export async function getImageRefCount(kv: StateKV, filePath: string): Promise<number> {
   const count = await kv.get<number>(KV.imageRefs, filePath);
@@ -17,7 +18,7 @@ export async function incrementImageRef(kv: StateKV, filePath: string): Promise<
   });
 }
 
-export async function decrementImageRef(kv: StateKV, sdk: ISdk, filePath: string): Promise<void> {
+export async function decrementImageRef(kv: StateKV, sdk: IIIClient, filePath: string): Promise<void> {
   return withKeyedLock(`imgRef:${filePath}`, async () => {
     const current = await getImageRefCount(kv, filePath);
     if (current <= 1) {
@@ -35,4 +36,16 @@ export async function decrementImageRef(kv: StateKV, sdk: ISdk, filePath: string
       await kv.set(KV.imageRefs, filePath, current - 1);
     }
   });
+}
+
+export async function releaseImageRef(kv: StateKV, sdk: IIIClient, ownerId: string, filePath: string): Promise<void> {
+  try {
+    await decrementImageRef(kv, sdk, filePath);
+  } catch (err) {
+    logger.warn("Image reference release failed after delete", {
+      ownerId,
+      imageRef: filePath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

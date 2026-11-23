@@ -6,25 +6,17 @@ import {
   copyFileSync,
   renameSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import * as p from "@clack/prompts";
 
-// Env values use ${VAR:-default} expansion so the wired MCP entry
-// inherits AGENTMEMORY_URL / AGENTMEMORY_SECRET / AGENTMEMORY_TOOLS
-// from the user's shell, but never fails parse when the var is unset
-// (#510). Earlier `${VAR}` form caused Claude Code to silently drop the
-// server when no shell-level export existed — per the Claude Code MCP
-// docs, "If a required environment variable is not set and has no
-// default value, Claude Code will fail to parse the config."
-//
-// Defaults match the documented runtime: localhost:3111 (no auth, all
-// tools). One wired entry now serves local AND remote (Kubernetes /
-// reverse-proxied) deployments without doctor-warning duplicates (#375)
-// AND fresh installs that haven't exported envs (#510).
+const MCP_COMMAND =
+  process.platform === "win32"
+    ? { command: "cmd", args: ["/c", "npx", "-y", "@agentmemory/mcp"] }
+    : { command: "npx", args: ["-y", "@agentmemory/mcp"] };
+
 export const AGENTMEMORY_MCP_BLOCK = {
-  command: "npx",
-  args: ["-y", "@agentmemory/mcp"],
+  ...MCP_COMMAND,
   env: {
     AGENTMEMORY_URL: "${AGENTMEMORY_URL:-http://localhost:3111}",
     AGENTMEMORY_SECRET: "${AGENTMEMORY_SECRET:-}",
@@ -53,6 +45,40 @@ export const AGENTMEMORY_COPILOT_MCP_BLOCK = {
   },
   tools: ["*"],
 };
+
+export function isAgentmemoryMcpEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const e = entry as Record<string, unknown>;
+  if (e["command"] !== AGENTMEMORY_MCP_BLOCK.command) return false;
+  const args = Array.isArray(e["args"]) ? (e["args"] as string[]) : [];
+  return args.includes("@agentmemory/mcp");
+}
+
+export function isLegacyMcpCommand(command: unknown, args: unknown): boolean {
+  return (
+    AGENTMEMORY_MCP_BLOCK.command !== "npx" &&
+    command === "npx" &&
+    Array.isArray(args) &&
+    args.includes("@agentmemory/mcp")
+  );
+}
+
+export function toCommandPath(path: string): string {
+  return process.platform === "win32" ? path.replace(/\\/g, "/") : path;
+}
+
+export function resolveZedConfigDir(home: string = homedir()): string {
+  if (process.platform !== "win32") return join(home, ".config", "zed");
+  return join(process.env["APPDATA"] || join(home, "AppData", "Roaming"), "Zed");
+}
+
+export function resolveDshHome(home: string = homedir()): string {
+  const override = process.env["DSH_HOME"];
+  const value = override?.trim() ? override : join(home, ".dsh");
+  if (value === "~") return resolve(home);
+  if (value.startsWith("~/") || value.startsWith("~\\")) return resolve(join(home, value.slice(2)));
+  return resolve(value);
+}
 
 export function backupsDir(): string {
   return join(homedir(), ".agentmemory", "backups");

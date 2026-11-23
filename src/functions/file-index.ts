@@ -1,10 +1,12 @@
-import type { ISdk } from "iii-sdk";
+import type { IIIClient } from "iii-sdk";
 import type { CompressedObservation, Session } from "../types.js";
 import { KV } from "../state/schema.js";
 import { StateKV } from "../state/kv.js";
 import { recordAudit } from "./audit.js";
 import { recordAccessBatch } from "./access-tracker.js";
 import { logger } from "../logger.js";
+
+const SESSION_LOAD_CONCURRENCY = 4;
 
 interface FileHistory {
   file: string;
@@ -19,7 +21,7 @@ interface FileHistory {
   }>;
 }
 
-export function registerFileIndexFunction(sdk: ISdk, kv: StateKV): void {
+export function registerFileIndexFunction(sdk: IIIClient, kv: StateKV): void {
   sdk.registerFunction("mem::file-context", 
     async (
       data: { sessionId?: string; files?: string[]; project?: string } | undefined,
@@ -59,12 +61,19 @@ export function registerFileIndexFunction(sdk: ISdk, kv: StateKV): void {
         .slice(0, 15);
 
       const obsCache = new Map<string, CompressedObservation[]>();
-      for (const session of otherSessions) {
-        obsCache.set(
-          session.id,
-          await kv.list<CompressedObservation>(KV.observations(session.id)),
-        );
-      }
+      let next = 0;
+      const loadNext = async (): Promise<void> => {
+        while (next < otherSessions.length) {
+          const session = otherSessions[next++];
+          obsCache.set(
+            session.id,
+            await kv.list<CompressedObservation>(KV.observations(session.id)),
+          );
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(SESSION_LOAD_CONCURRENCY, otherSessions.length) }, loadNext),
+      );
 
       for (const file of files) {
         const history: FileHistory = { file, observations: [] };

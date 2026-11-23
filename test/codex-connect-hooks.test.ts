@@ -1,5 +1,13 @@
-import { describe, it, expect } from "vitest";
-import { writeFileSync, readFileSync, mkdirSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import {
+  copyFileSync,
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  existsSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -36,6 +44,29 @@ describe("buildMergedHooks", () => {
     expect(preToolUse).toBeDefined();
     expect(preToolUse!.length).toBeGreaterThan(0);
     expect(preToolUse![0].matcher).toBe("Edit|Write|Read|Glob|Grep");
+  });
+
+  it("keeps handler fields other than the command, such as statusMessage", () => {
+    const merged = buildMergedHooks(null, PLUGIN_ROOT);
+    expect(merged.hooks["SessionStart"]![0]!.hooks[0]!.statusMessage).toBe(
+      "agentmemory: loading session context",
+    );
+  });
+
+  it("keeps a pluginRoot containing $-replacement patterns literal", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "am-codex-hooks-"));
+    try {
+      const oddRoot = join(tmp, "plug$&$$in");
+      mkdirSync(join(oddRoot, "hooks"), { recursive: true });
+      copyFileSync(
+        join(PLUGIN_ROOT, "hooks", "hooks.codex.json"),
+        join(oddRoot, "hooks", "hooks.codex.json"),
+      );
+      const command = buildMergedHooks(null, oddRoot).hooks["Stop"]![0]!.hooks[0]!.command;
+      expect(command).toContain(`${oddRoot}/scripts/`);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("includes all six expected lifecycle events", () => {
@@ -133,5 +164,34 @@ describe("buildMergedHooks file round-trip", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("connect codex --with-hooks on an already-wired config", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "am-codex-wired-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("installs the requested hooks and reports them before returning already-wired", async () => {
+    const { adapter } = await import("../src/cli/connect/codex.js");
+    expect(await adapter.install({ dryRun: false, force: false })).toMatchObject({ kind: "installed" });
+    const hooksPath = join(home, ".codex", "hooks.json");
+    expect(existsSync(hooksPath)).toBe(false);
+
+    const result = await adapter.install({ dryRun: false, force: false, withHooks: true });
+    expect(result).toMatchObject({ kind: "already-wired", hooks: "installed" });
+    const hooks = JSON.parse(readFileSync(hooksPath, "utf-8")) as HookManifest;
+    expect(Object.keys(hooks.hooks)).toContain("SessionStart");
   });
 });
